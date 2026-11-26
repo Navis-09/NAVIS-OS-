@@ -491,7 +491,290 @@ phone(b){
   draw();
 },
 browser_old(b){b.append(mk('small','','Pages open in your device’s browser. An embedded browser engine isn’t part of this prototype.'));const i=mk('input','in');i.placeholder='Search or enter an address';const go=u=>{u=u.trim();if(!u)return;const web=/^https?:\/\//.test(u),dom=/^[\w-]+(\.[\w-]+)+(\/.*)?$/.test(u);window.open(web?u:dom?'https://'+u:'https://duckduckgo.com/?q='+encodeURIComponent(u),'_blank','noopener')};const g=mk('button','btn p','Open');g.onclick=()=>go(i.value);i.onkeydown=e=>{if(e.key==='Enter')go(i.value)};b.append(i,g)},
-store(b){const L=mk('div'),q=mk('input','in');q.placeholder='Search apps';const cs=mk('select','btn');cs.style.margin='8px 0';cs.setAttribute('aria-label','Category');['All',...new Set(CAT.map(a=>a.cat))].forEach(c=>{const o=mk('option','',c);o.value=c==='All'?'':c;cs.append(o)});cs.onchange=()=>draw();const draw=()=>{L.innerHTML='';CAT.filter(a=>a.n.toLowerCase().includes(q.value.toLowerCase())&&(!cs.value||a.cat===cs.value)).forEach(a=>{const ins=S.inst&&S.inst[a.id],c=mk('div','card');c.style.marginTop='8px';c.innerHTML='<span style="display:flex;gap:12px;align-items:center">'+catTile(a,'s')+'<span><b>'+a.n+'</b> <small>v'+a.v+'</small><br><small>'+a.d+(a.web?' Opens the official site in your browser.':' Permissions: none.')+'</small></span></span>';const x=mk('button','btn'+(ins?'':' p'),!ins?'Install':ins!==a.v?'Update':'Uninstall');x.onclick=()=>{S.inst=S.inst||{};if(!ins||ins!==a.v)S.inst[a.id]=a.v;else{delete S.inst[a.id];closeApp('x:'+a.id)}save();grid();draw()};c.append(x);L.append(c)})};q.oninput=draw;draw();b.append(mk('small','','Apps run in a sandbox with no access to your data. This catalog is bundled with the build.'),cs,q,L)},
+pixora(b){
+  const MAX_CATALOG_CAPACITY = 100000000; // 100,000,000 addressable app slots
+  V.pixoraInstalled = V.pixoraInstalled || {};
+  V.pixoraCustomApps = V.pixoraCustomApps || [];
+
+  // Starter apps you already have + room for millions more added later
+  const BASE_CATALOG = [
+    {
+      id: 'px-00000001',
+      n: 'Device Pulse',
+      i: '⚡',
+      v: '1.0',
+      cat: 'Tools',
+      d: 'Checks device model and tests native vibration.',
+      html: `<body style="font:15px system-ui;padding:18px;color:#e8f1fa;background:#071220">
+        <h3>NAVIS Device Pulse</h3>
+        <p id="info">Reading hardware bridge…</p>
+        <button id="vib" style="padding:10px 16px;border-radius:10px;border:0;background:#3fd0c9;color:#04201f;font-weight:700">Pulse Vibrate</button>
+        <script>
+          const n = window.NavisNative || (window.parent && window.parent.NavisNative);
+          document.getElementById('info').textContent = (n && n.getDeviceModel) ? n.getDeviceModel() : 'NAVIS Runtime Active';
+          document.getElementById('vib').onclick = () => { if (n && n.vibrate) n.vibrate(120); };
+        </script>
+      </body>`
+    },
+    {
+      id: 'px-00000002',
+      n: 'Quick Notes Pad',
+      i: '📝',
+      v: '1.0',
+      cat: 'Productivity',
+      d: 'Jot quick notes and save them straight into NAVIS Files.',
+      html: `<body style="font:15px system-ui;padding:16px;color:#e8f1fa;background:#071220">
+        <h3>Quick Notes Pad</h3>
+        <input id="fn" placeholder="note.txt" value="pixora_note.txt" style="width:100%;padding:8px;margin-bottom:8px;border-radius:8px;border:1px solid #243b55;background:#040b17;color:#e8f1fa" />
+        <textarea id="ft" rows="6" placeholder="Write here…" style="width:100%;padding:8px;border-radius:8px;border:1px solid #243b55;background:#040b17;color:#e8f1fa"></textarea>
+        <button id="sv" style="margin-top:8px;padding:10px 16px;border-radius:10px;border:0;background:#3fd0c9;color:#04201f;font-weight:700">Save to NAVIS Files</button>
+        <script>
+          document.getElementById('sv').onclick = () => {
+            const name = (document.getElementById('fn').value || 'note.txt').trim();
+            const body = document.getElementById('ft').value || '';
+            if (window.parent && typeof window.parent.navisStoreFile === 'function') {
+              window.parent.navisStoreFile('Documents', name, 'text/plain', body, false);
+            }
+          };
+        </script>
+      </body>`
+    },
+    {
+      id: 'px-00000003',
+      n: 'Web Portal Shortcut',
+      i: '🌐',
+      v: '1.0',
+      cat: 'Web',
+      d: 'Opens a chosen URL inside NAVIS Browser.',
+      url: 'https://www.wikipedia.org'
+    }
+  ];
+
+  // Merge custom/shard-added apps without duplicating IDs
+  const mergeCatalog = () => {
+    const map = new Map();
+    BASE_CATALOG.forEach(item => map.set(item.id, item));
+    (V.pixoraCustomApps || []).forEach(item => {
+      if (item && item.id && map.size < MAX_CATALOG_CAPACITY) {
+        map.set(item.id, item);
+      }
+    });
+    return Array.from(map.values());
+  };
+
+  // Global helper so future shards, scripts, or JSON feeds can add apps into Pixora
+  window.pixoraAddApps = (appsList, persistToVault = true) => {
+    if (!Array.isArray(appsList) || !appsList.length) return 0;
+    const existingIds = new Set(mergeCatalog().map(a => a.id));
+    let added = 0;
+    for (const app of appsList) {
+      if (!app || !app.id || existingIds.has(app.id)) continue;
+      if (mergeCatalog().length + added >= MAX_CATALOG_CAPACITY) break;
+      V.pixoraCustomApps.push({
+        id: String(app.id),
+        n: String(app.n || app.name || 'Untitled App'),
+        i: String(app.i || app.icon || '📦'),
+        v: String(app.v || app.version || '1.0'),
+        cat: String(app.cat || app.category || 'General'),
+        d: String(app.d || app.desc || 'Pixora OS application'),
+        html: app.html || '',
+        url: app.url || ''
+      });
+      existingIds.add(app.id);
+      added++;
+    }
+    if (persistToVault && added > 0) saveV();
+    if (document.getElementById('pixora-root')) renderPixora();
+    return added;
+  };
+
+  // Optional remote shard loader (for huge catalogs hosted on a server/CDN)
+  window.pixoraLoadShardUrl = async (shardUrl) => {
+    try {
+      const res = await fetch(shardUrl);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      const list = Array.isArray(data) ? data : (data.apps || []);
+      const count = window.pixoraAddApps(list, true);
+      toast('Pixora loaded ' + count + ' apps');
+      return count;
+    } catch (e) {
+      toast('Could not load Pixora shard');
+      return 0;
+    }
+  };
+
+  const launchPixoraApp = (app) => {
+    if (app.url && window.NavisBrowser && window.NavisBrowser.openUrl) {
+      window.NavisBrowser.openUrl(app.url);
+      return;
+    }
+    const win = mk('div', 'card');
+    win.style.cssText = 'flex-direction:column;align-items:stretch;gap:8px;margin-top:10px;padding:12px';
+    const hdr = mk('div', 'row');
+    hdr.style.cssText = 'justify-content:space-between;align-items:center';
+    hdr.append(mk('strong', '', (app.i || '📦') + ' ' + app.n + ' v' + (app.v || '1.0')));
+    const closeBtn = mk('button', 'btn', 'Close');
+
+    const frame = document.createElement('iframe');
+    frame.style.cssText = 'width:100%;height:340px;border:1px solid rgba(255,255,255,.14);border-radius:10px;background:#071220';
+    if (app.html) {
+      frame.srcdoc = app.html;
+    } else if (app.url) {
+      frame.src = app.url;
+    } else {
+      frame.srcdoc = `<body style="font:15px system-ui;padding:18px;color:#e8f1fa;background:#071220"><h3>${app.n}</h3><p>${app.d || 'Ready.'}</p></body>`;
+    }
+    closeBtn.onclick = () => win.remove();
+    hdr.append(closeBtn);
+    win.append(hdr, frame);
+    const runnerHost = document.getElementById('pixora-runner-host');
+    if (runnerHost) {
+      runnerHost.innerHTML = '';
+      runnerHost.append(win);
+    }
+  };
+
+  let query = '';
+  let category = 'All';
+  let page = 0;
+  const PAGE_SIZE = 12;
+
+  const renderPixora = () => {
+    const catalog = mergeCatalog();
+    const categories = ['All', ...Array.from(new Set(catalog.map(a => a.cat || 'General')))];
+
+    b.innerHTML = '';
+    const root = mk('div', '');
+    root.id = 'pixora-root';
+
+    const banner = mk('div', 'card');
+    banner.style.cssText = 'flex-direction:column;align-items:flex-start;gap:4px';
+    banner.append(
+      mk('strong', '', 'PIXORA STORE · NAVIS Mobile App Hub'),
+      mk('small', '', `Catalog capacity: ${MAX_CATALOG_CAPACITY.toLocaleString()} apps · Indexed now: ${catalog.length.toLocaleString()} · Installed: ${Object.keys(V.pixoraInstalled).length}`)
+    );
+    root.append(banner);
+
+    const search = mk('input', 'in');
+    search.placeholder = 'Search Pixora apps by name or description…';
+    search.value = query;
+    search.oninput = () => { query = search.value.trim().toLowerCase(); page = 0; renderPixora(); };
+    root.append(search);
+
+    const catRow = mk('div', 'row');
+    catRow.style.cssText = 'flex-wrap:wrap;gap:6px;margin:8px 0';
+    categories.forEach(c => {
+      const btn = mk('button', 'btn' + (category === c ? ' p' : ''), c);
+      btn.onclick = () => { category = c; page = 0; renderPixora(); };
+      catRow.append(btn);
+    });
+    root.append(catRow);
+
+    // Quick developer/shard import box so you can add new apps anytime
+    const shardBox = mk('div', 'card');
+    shardBox.style.cssText = 'flex-direction:column;align-items:stretch;gap:6px;margin-bottom:10px';
+    const shardUrlIn = mk('input', 'in');
+    shardUrlIn.placeholder = 'Optional JSON shard URL (e.g. https://.../shard-001.json)';
+    const loadShardBtn = mk('button', 'btn', 'Load Catalog Shard');
+    loadShardBtn.onclick = () => {
+      if (!shardUrlIn.value.trim()) return toast('Enter a JSON shard URL first.');
+      window.pixoraLoadShardUrl(shardUrlIn.value.trim());
+    };
+    shardBox.append(mk('small', '', 'Add future app batches via JSON shard or window.pixoraAddApps([...])'), shardUrlIn, loadShardBtn);
+    root.append(shardBox);
+
+    const runnerHost = mk('div', '');
+    runnerHost.id = 'pixora-runner-host';
+    root.append(runnerHost);
+
+    const filtered = catalog.filter(a => {
+      const okCat = category === 'All' || (a.cat || 'General') === category;
+      const okQ = !query ||
+        (a.n || '').toLowerCase().includes(query) ||
+        (a.d || '').toLowerCase().includes(query) ||
+        (a.id || '').toLowerCase().includes(query);
+      return okCat && okQ;
+    });
+
+    const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+    if (page >= totalPages) page = totalPages - 1;
+    const slice = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+    if (!slice.length) {
+      root.append(mk('p', '', 'No Pixora apps match this filter.'));
+    } else {
+      slice.forEach(app => {
+        const isInstalled = !!V.pixoraInstalled[app.id];
+        const card = mk('div', 'card');
+        card.style.cssText = 'margin-top:8px;gap:8px;align-items:center';
+
+        const icon = mk('div', '', app.i || '📦');
+        icon.style.fontSize = '24px';
+
+        const meta = mk('div');
+        meta.style.cssText = 'flex:1;min-width:120px';
+        const title = mk('div', '', app.n + ' ');
+        title.style.fontWeight = '700';
+        const ver = mk('small', '', `v${app.v || '1.0'} · ${app.cat || 'General'}`);
+        const desc = mk('div', '', app.d || '');
+        desc.style.fontSize = '12px';
+        meta.append(title, ver, desc);
+
+        if (isInstalled) {
+          const openBtn = mk('button', 'btn p', 'Open');
+          openBtn.onclick = () => launchPixoraApp(app);
+          const rmBtn = mk('button', 'btn', 'Remove');
+          rmBtn.onclick = () => {
+            delete V.pixoraInstalled[app.id];
+            saveV();
+            renderPixora();
+            toast('Removed ' + app.n);
+          };
+          card.append(icon, meta, openBtn, rmBtn);
+        } else {
+          const dlBtn = mk('button', 'btn p', 'Download');
+          dlBtn.onclick = () => {
+            V.pixoraInstalled[app.id] = {
+              id: app.id,
+              n: app.n,
+              i: app.i,
+              v: app.v,
+              cat: app.cat,
+              d: app.d,
+              html: app.html || '',
+              url: app.url || '',
+              installedAt: Date.now()
+            };
+            saveV();
+            renderPixora();
+            toast('Downloaded & installed ' + app.n);
+          };
+          card.append(icon, meta, dlBtn);
+        }
+        root.append(card);
+      });
+    }
+
+    if (totalPages > 1) {
+      const pager = mk('div', 'row');
+      pager.style.cssText = 'justify-content:space-between;align-items:center;margin-top:12px';
+      const prev = mk('button', 'btn', 'Prev');
+      prev.disabled = page === 0;
+      prev.onclick = () => { page--; renderPixora(); };
+      const lbl = mk('small', '', `Page ${page + 1} of ${totalPages}`);
+      const next = mk('button', 'btn', 'Next');
+      next.disabled = page >= totalPages - 1;
+      next.onclick = () => { page++; renderPixora(); };
+      pager.append(prev, lbl, next);
+      root.append(pager);
+    }
+
+    b.append(root);
+  };
+
+  renderPixora();
+},
 ai_old(b){const lg=mk('div');lg.style.cssText='flex:1;overflow:auto';const add=(t,c)=>{const m=mk('div','msg '+c);m.textContent=t;lg.append(m);lg.scrollTop=1e9};const i=mk('input','in');i.placeholder='Try: open notes, dark mode, timer 5, note buy milk';
 const say=t=>{add(t,'a');if(S.vo&&window.speechSynthesis)speechSynthesis.speak(new SpeechSynthesisUtterance(t))};
 const run=q=>{add(q,'u');const l=q.toLowerCase().trim();let m;
