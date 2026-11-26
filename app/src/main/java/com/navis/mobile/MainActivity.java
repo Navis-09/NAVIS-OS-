@@ -5,8 +5,10 @@ import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -16,6 +18,7 @@ import android.net.NetworkCapabilities;
 import android.net.Uri;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
@@ -54,6 +57,7 @@ import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
 
+    public static final String ACTION_FILE_SAVED = "com.navis.mobile.ACTION_FILE_SAVED";
     private static final String SHELL_URL = "https://appassets.androidplatform.net/assets/index.html";
     private static final String DEFAULT_BROWSER_URL = "https://www.google.com";
     private static final int REQ_CALL_PHONE = 201;
@@ -71,6 +75,67 @@ public class MainActivity extends AppCompatActivity {
     private File pendingPhotoFile;
     private boolean pendingOpenBtAfterPerm;
     private boolean pendingVoiceAfterPerm;
+    private boolean receiverRegistered;
+
+    private final BroadcastReceiver fileSavedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || !ACTION_FILE_SAVED.equals(intent.getAction())) return;
+            String folder = intent.getStringExtra("folder");
+            String name = intent.getStringExtra("name");
+            String mime = intent.getStringExtra("mime");
+            String path = intent.getStringExtra("path");
+            if (folder == null || folder.trim().isEmpty()) folder = "Downloads";
+            if (name == null || name.trim().isEmpty()) name = "download_" + System.currentTimeMillis();
+            if (mime == null || mime.trim().isEmpty()) mime = "application/octet-stream";
+
+            String payload = "";
+            boolean isDataUrl = false;
+            if (path != null && !path.isEmpty()) {
+                File f = new File(path);
+                if (f.exists() && f.length() <= 2_000_000L) {
+                    try (FileInputStream in = new FileInputStream(f);
+                         ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                        byte[] buf = new byte[4096];
+                        int n;
+                        while ((n = in.read(buf)) != -1) {
+                            bos.write(buf, 0, n);
+                        }
+                        byte[] raw = bos.toByteArray();
+                        if (mime.startsWith("text/") || name.matches(".*\\.(txt|md|json|csv|html|js|xml|log)$")) {
+                            payload = new String(raw, StandardCharsets.UTF_8);
+                            isDataUrl = false;
+                        } else {
+                            payload = "data:" + mime + ";base64," + Base64.encodeToString(raw, Base64.NO_WRAP);
+                            isDataUrl = true;
+                        }
+                    } catch (Exception ignored) {
+                    }
+                }
+            }
+
+            final String fEsc = escapeJs(folder);
+            final String nEsc = escapeJs(name);
+            final String mEsc = escapeJs(mime);
+            final String pEsc = escapeJs(payload);
+            final boolean dFlag = isDataUrl;
+
+            if (webView != null) {
+                webView.post(() -> webView.evaluateJavascript(
+                        "if(window.navisStoreFile){window.navisStoreFile('" + fEsc + "','" + nEsc + "','" + mEsc + "','" + pEsc + "'," + dFlag + ");}" +
+                        "if(typeof toast==='function'){toast('Downloaded to NAVIS Files: " + nEsc + "');}",
+                        null));
+            }
+        }
+    };
+
+    private static String escapeJs(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\r", "")
+                .replace("\n", "\\n");
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -103,6 +168,7 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new NavisFilesBridge(), "NavisFiles");
         webView.addJavascriptInterface(new NavisConnectivityBridge(), "NavisConnectivity");
         webView.addJavascriptInterface(new NavisVoiceBridge(), "NavisVoice");
+        webView.addJavascriptInterface(new NavisSystemBridge(), "NavisSystem");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -151,6 +217,32 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.loadUrl(SHELL_URL);
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (!receiverRegistered) {
+            IntentFilter filter = new IntentFilter(ACTION_FILE_SAVED);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(fileSavedReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                registerReceiver(fileSavedReceiver, filter);
+            }
+            receiverRegistered = true;
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        if (receiverRegistered) {
+            try {
+                unregisterReceiver(fileSavedReceiver);
+            } catch (Exception ignored) {
+            }
+            receiverRegistered = false;
+        }
     }
 
     private void openInNavisBrowser(String url) {
@@ -324,7 +416,7 @@ public class MainActivity extends AppCompatActivity {
                 pendingPhotoFile.delete();
             }
             if (dataUrl != null && webView != null) {
-                String escaped = dataUrl.replace("\\", "\\\\").replace("'", "\\'");
+                String escaped = escapeJs(dataUrl);
                 webView.post(() -> webView.evaluateJavascript(
                         "if(window.onNavisPhotoCaptured){window.onNavisPhotoCaptured('" + escaped + "');}",
                         null));
@@ -332,10 +424,7 @@ public class MainActivity extends AppCompatActivity {
         } else if (requestCode == REQ_VOICE_INPUT && resultCode == RESULT_OK && data != null) {
             ArrayList<String> matches = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
             if (matches != null && !matches.isEmpty() && webView != null) {
-                String transcript = matches.get(0)
-                        .replace("\\", "\\\\")
-                        .replace("'", "\\'")
-                        .replace("\n", " ");
+                String transcript = escapeJs(matches.get(0).replace("\n", " "));
                 webView.post(() -> webView.evaluateJavascript(
                         "if(window.onNavisVoiceResult){window.onNavisVoiceResult('" + transcript + "');}",
                         null));
@@ -575,6 +664,32 @@ public class MainActivity extends AppCompatActivity {
         public boolean startListening() {
             runOnUiThread(() -> startVoiceRecognition());
             return true;
+        }
+    }
+
+    public class NavisSystemBridge {
+        @JavascriptInterface
+        public String getBatteryJson() {
+            JSONObject obj = new JSONObject();
+            try {
+                IntentFilter ifilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
+                Intent batteryStatus = registerReceiver(null, ifilter);
+                int level = -1;
+                int scale = 100;
+                boolean charging = false;
+                if (batteryStatus != null) {
+                    level = batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                    scale = batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, 100);
+                    int status = batteryStatus.getIntExtra(BatteryManager.EXTRA_STATUS, -1);
+                    charging = status == BatteryManager.BATTERY_STATUS_CHARGING
+                            || status == BatteryManager.BATTERY_STATUS_FULL;
+                }
+                int pct = (level >= 0 && scale > 0) ? Math.round((level * 100f) / scale) : -1;
+                obj.put("percent", pct);
+                obj.put("charging", charging);
+            } catch (Exception ignored) {
+            }
+            return obj.toString();
         }
     }
 
