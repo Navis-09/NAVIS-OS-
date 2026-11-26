@@ -1,0 +1,10 @@
+<resources>
+    <style name="Theme.NavisMobile" parent="Theme.AppCompat.NoActionBar">
+        <item name="colorPrimary">#030814</item>
+        <item name="colorPrimaryDark">#030814</item>
+        <item name="colorAccent">#3fd0c9</item>
+        <item name="android:windowBackground">#030814</item>
+        <item name="android:statusBarColor">#030814</item>
+        <item name="android:navigationBarColor">#030814</item>
+    </style>
+</resources>
