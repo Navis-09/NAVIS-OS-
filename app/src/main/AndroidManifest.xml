@@ -10,9 +10,9 @@
 
     <application
         android:allowBackup="true"
-        android:icon="@drawable/ic_navis_launcher
+        android:icon="@drawable/ic_navis_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@drawable/ic_navis_launcher
+        android:roundIcon="@drawable/ic_navis_launcher"
         android:supportsRtl="true"
         android:theme="@style/Theme.NavisMobile"
         android:usesCleartextTraffic="true">
