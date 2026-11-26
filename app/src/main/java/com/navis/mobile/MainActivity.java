@@ -20,6 +20,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
 import android.provider.Settings;
+import android.speech.RecognizerIntent;
 import android.telephony.SmsManager;
 import android.util.Base64;
 import android.view.View;
@@ -48,6 +49,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Locale;
 import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
@@ -59,6 +61,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_CAMERA_PERM = 203;
     private static final int REQ_TAKE_PHOTO = 204;
     private static final int REQ_BT_CONNECT = 205;
+    private static final int REQ_AUDIO_PERM = 206;
+    private static final int REQ_VOICE_INPUT = 207;
 
     private WebView webView;
     private String pendingCallNumber;
@@ -66,6 +70,7 @@ public class MainActivity extends AppCompatActivity {
     private String pendingSmsBody;
     private File pendingPhotoFile;
     private boolean pendingOpenBtAfterPerm;
+    private boolean pendingVoiceAfterPerm;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -97,6 +102,7 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new NavisBrowserBridge(), "NavisBrowser");
         webView.addJavascriptInterface(new NavisFilesBridge(), "NavisFiles");
         webView.addJavascriptInterface(new NavisConnectivityBridge(), "NavisConnectivity");
+        webView.addJavascriptInterface(new NavisVoiceBridge(), "NavisVoice");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -289,6 +295,25 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void startVoiceRecognition() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            pendingVoiceAfterPerm = true;
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.RECORD_AUDIO}, REQ_AUDIO_PERM);
+            return;
+        }
+        try {
+            Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                    RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+            intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+            intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak to NAVIS AI...");
+            startActivityForResult(intent, REQ_VOICE_INPUT);
+        } catch (Exception ignored) {
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -302,6 +327,17 @@ public class MainActivity extends AppCompatActivity {
                 String escaped = dataUrl.replace("\\", "\\\\").replace("'", "\\'");
                 webView.post(() -> webView.evaluateJavascript(
                         "if(window.onNavisPhotoCaptured){window.onNavisPhotoCaptured('" + escaped + "');}",
+                        null));
+            }
+        } else if (requestCode == REQ_VOICE_INPUT && resultCode == RESULT_OK && data != null) {
+            ArrayList<String> matches = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+            if (matches != null && !matches.isEmpty() && webView != null) {
+                String transcript = matches.get(0)
+                        .replace("\\", "\\\\")
+                        .replace("'", "\\'")
+                        .replace("\n", " ");
+                webView.post(() -> webView.evaluateJavascript(
+                        "if(window.onNavisVoiceResult){window.onNavisVoiceResult('" + transcript + "');}",
                         null));
             }
         }
@@ -342,6 +378,12 @@ public class MainActivity extends AppCompatActivity {
                 webView.post(() -> webView.evaluateJavascript(
                         "if(window.onNavisConnectivityUpdated){window.onNavisConnectivityUpdated();}",
                         null));
+            }
+        } else if (requestCode == REQ_AUDIO_PERM) {
+            boolean openVoice = pendingVoiceAfterPerm;
+            pendingVoiceAfterPerm = false;
+            if (granted && openVoice) {
+                startVoiceRecognition();
             }
         }
     }
@@ -525,6 +567,14 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public void openBluetoothSettings() {
             runOnUiThread(() -> openBluetoothPanel());
+        }
+    }
+
+    public class NavisVoiceBridge {
+        @JavascriptInterface
+        public boolean startListening() {
+            runOnUiThread(() -> startVoiceRecognition());
+            return true;
         }
     }
 
