@@ -2,14 +2,24 @@ package com.navis.mobile;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.Uri;
+import android.net.wifi.WifiInfo;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.MediaStore;
+import android.provider.Settings;
 import android.telephony.SmsManager;
 import android.util.Base64;
 import android.view.View;
@@ -29,12 +39,16 @@ import androidx.core.content.ContextCompat;
 import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
 
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Set;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -44,12 +58,14 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQ_SEND_SMS = 202;
     private static final int REQ_CAMERA_PERM = 203;
     private static final int REQ_TAKE_PHOTO = 204;
+    private static final int REQ_BT_CONNECT = 205;
 
     private WebView webView;
     private String pendingCallNumber;
     private String pendingSmsNumber;
     private String pendingSmsBody;
     private File pendingPhotoFile;
+    private boolean pendingOpenBtAfterPerm;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -80,6 +96,7 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new NavisCameraBridge(), "NavisCamera");
         webView.addJavascriptInterface(new NavisBrowserBridge(), "NavisBrowser");
         webView.addJavascriptInterface(new NavisFilesBridge(), "NavisFiles");
+        webView.addJavascriptInterface(new NavisConnectivityBridge(), "NavisConnectivity");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -232,6 +249,46 @@ public class MainActivity extends AppCompatActivity {
         return "data:image/jpeg;base64," + b64;
     }
 
+    private BluetoothAdapter getBluetoothAdapter() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            BluetoothManager bm = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            return bm != null ? bm.getAdapter() : BluetoothAdapter.getDefaultAdapter();
+        }
+        return BluetoothAdapter.getDefaultAdapter();
+    }
+
+    private boolean hasBluetoothConnectPerm() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            return ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT)
+                    == PackageManager.PERMISSION_GRANTED;
+        }
+        return true;
+    }
+
+    private void openWifiPanel() {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startActivity(new Intent(Settings.Panel.ACTION_WIFI));
+            } else {
+                startActivity(new Intent(Settings.ACTION_WIFI_SETTINGS));
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void openBluetoothPanel() {
+        if (!hasBluetoothConnectPerm() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            pendingOpenBtAfterPerm = true;
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.BLUETOOTH_CONNECT}, REQ_BT_CONNECT);
+            return;
+        }
+        try {
+            startActivity(new Intent(Settings.ACTION_BLUETOOTH_SETTINGS));
+        } catch (Exception ignored) {
+        }
+    }
+
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -275,6 +332,27 @@ public class MainActivity extends AppCompatActivity {
             if (granted) {
                 startCameraCapture();
             }
+        } else if (requestCode == REQ_BT_CONNECT) {
+            boolean openBt = pendingOpenBtAfterPerm;
+            pendingOpenBtAfterPerm = false;
+            if (granted && openBt) {
+                openBluetoothPanel();
+            }
+            if (webView != null) {
+                webView.post(() -> webView.evaluateJavascript(
+                        "if(window.onNavisConnectivityUpdated){window.onNavisConnectivityUpdated();}",
+                        null));
+            }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        if (webView != null) {
+            webView.post(() -> webView.evaluateJavascript(
+                    "if(window.onNavisConnectivityUpdated){window.onNavisConnectivityUpdated();}",
+                    null));
         }
     }
 
@@ -364,6 +442,89 @@ public class MainActivity extends AppCompatActivity {
         public boolean deleteFile(String folder, String name) {
             File f = resolveSafeFile(folder, name);
             return f != null && f.exists() && f.delete();
+        }
+    }
+
+    public class NavisConnectivityBridge {
+        @JavascriptInterface
+        public String getStatusJson() {
+            JSONObject obj = new JSONObject();
+            try {
+                WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+                boolean wifiEnabled = wm != null && wm.isWifiEnabled();
+                boolean wifiConnected = false;
+                int linkSpeed = 0;
+
+                ConnectivityManager cm = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                    Network net = cm.getActiveNetwork();
+                    NetworkCapabilities caps = net != null ? cm.getNetworkCapabilities(net) : null;
+                    wifiConnected = caps != null && caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI);
+                }
+
+                if (wm != null && wifiEnabled) {
+                    WifiInfo info = wm.getConnectionInfo();
+                    if (info != null) {
+                        linkSpeed = info.getLinkSpeed();
+                    }
+                }
+
+                obj.put("wifiEnabled", wifiEnabled);
+                obj.put("wifiConnected", wifiConnected);
+                obj.put("wifiSpeedMbps", linkSpeed);
+
+                BluetoothAdapter bt = getBluetoothAdapter();
+                boolean btSupported = bt != null;
+                boolean btPermGranted = hasBluetoothConnectPerm();
+                boolean btEnabled = false;
+                JSONArray pairedArr = new JSONArray();
+
+                if (btSupported && btPermGranted) {
+                    try {
+                        btEnabled = bt.isEnabled();
+                        if (btEnabled) {
+                            Set<BluetoothDevice> bonded = bt.getBondedDevices();
+                            if (bonded != null) {
+                                for (BluetoothDevice dev : bonded) {
+                                    JSONObject d = new JSONObject();
+                                    d.put("name", dev.getName() != null ? dev.getName() : "Unknown Device");
+                                    d.put("address", dev.getAddress() != null ? dev.getAddress() : "");
+                                    pairedArr.put(d);
+                                }
+                            }
+                        }
+                    } catch (SecurityException ignored) {
+                    }
+                }
+
+                obj.put("btSupported", btSupported);
+                obj.put("btPermGranted", btPermGranted);
+                obj.put("btEnabled", btEnabled);
+                obj.put("pairedDevices", pairedArr);
+            } catch (Exception ignored) {
+            }
+            return obj.toString();
+        }
+
+        @JavascriptInterface
+        public void requestBluetoothPermission() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !hasBluetoothConnectPerm()) {
+                    pendingOpenBtAfterPerm = false;
+                    ActivityCompat.requestPermissions(MainActivity.this,
+                            new String[]{Manifest.permission.BLUETOOTH_CONNECT}, REQ_BT_CONNECT);
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void openWifiSettings() {
+            runOnUiThread(() -> openWifiPanel());
+        }
+
+        @JavascriptInterface
+        public void openBluetoothSettings() {
+            runOnUiThread(() -> openBluetoothPanel());
         }
     }
 
