@@ -143,8 +143,75 @@ camera(b){const v=mk('video');v.autoplay=v.playsInline=v.muted=true;v.style.cssT
 if(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}}).then(s=>{st=s;v.srcObject=s}).catch(e=>{b.prepend(mk('p','','Camera unavailable ('+e.name+'). Allow camera access for this page, or add photos from the Photos app.'));log('Camera: '+e.name)});else b.prepend(mk('p','','This browser has no camera API.'));
 sh.onclick=()=>{if(!v.videoWidth)return toast('The camera isn’t ready.');const c=document.createElement('canvas'),w=Math.min(640,v.videoWidth);c.width=w;c.height=v.videoHeight*w/v.videoWidth;c.getContext('2d').drawImage(v,0,0,c.width,c.height);addPhoto(c.toDataURL('image/jpeg',.7));toast('Saved to Photos.')};
 b.append(v,sh);new MutationObserver(()=>{if(!document.contains(b)&&st)st.getTracks().forEach(t=>t.stop())}).observe($('#ph'),{childList:true})},
-photos(b){const draw=()=>{b.innerHTML='<small>Photos are stored on this device without encryption.</small>';const f=mk('input');f.type='file';f.accept='image/*';f.multiple=true;f.onchange=()=>[...f.files].forEach(fl=>shrink(URL.createObjectURL(fl),i=>i.width,d=>{addPhoto(d);draw()}));b.append(f);const g=mk('div','gal');g.style.marginTop='10px';(S.ph||[]).forEach((d,i)=>{const m=mk('img');m.src=d;m.alt='Photo '+(i+1);m.onclick=()=>view(i);g.append(m)});if(!(S.ph||[]).length)b.append(mk('p','','<small>No photos yet. Take one in Camera or add from your device.</small>'));b.append(g)};
-const view=i=>{b.innerHTML='';const m=mk('img');m.src=S.ph[i];m.alt='Photo';m.style.width='100%';const back=mk('button','btn','Back');back.onclick=draw;const pf=mk('button','btn','Profile picture');pf.onclick=()=>{S.pic=S.ph[i];save();toast('Profile picture set.')};const dl=mk('button','btn','Delete');dl.onclick=()=>{S.ph.splice(i,1);save();draw()};const r=mk('div','row');r.append(back,pf,dl);b.append(m,r)};draw()},
+  photos(b){
+  V.p=V.p||[];
+  const bridge=window.NavisCamera||(window.parent&&window.parent.NavisCamera);
+  const addPhoto=src=>{
+    if(!src)return;
+    V.p.unshift({
+      src,
+      ts:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+    });
+    V.p=V.p.slice(0,24);
+    saveV();
+    draw();
+    toast('Saved to NAVIS Photos');
+  };
+  window.onNavisPhotoCaptured=src=>addPhoto(src);
+
+  const draw=()=>{
+    b.innerHTML='';
+    b.append(mk('small','','NAVIS Photos · Captures photos with your camera and stores them inside NAVIS Mobile.'));
+
+    const camBtn=mk('button','btn p','Take Photo');
+    camBtn.onclick=()=>{
+      if(bridge&&bridge.capturePhoto){
+        bridge.capturePhoto();
+      }else{
+        toast('Camera bridge unavailable in browser preview.');
+      }
+    };
+    b.append(camBtn);
+
+    if(!V.p.length){
+      b.append(mk('p','','No photos stored in NAVIS Photos yet.'));
+      return;
+    }
+
+    const grid=mk('div','');
+    grid.style.cssText='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px';
+
+    V.p.forEach((item,idx)=>{
+      const src=typeof item==='string'?item:item.src;
+      const card=mk('div','card');
+      card.style.cssText='flex-direction:column;align-items:stretch;gap:6px;padding:8px';
+
+      const img=document.createElement('img');
+      img.src=src;
+      img.alt='NAVIS Photo '+(idx+1);
+      img.style.cssText='width:100%;height:140px;object-fit:cover;border-radius:8px;display:block';
+
+      const row=mk('div','row');
+      row.style.cssText='justify-content:space-between;align-items:center';
+      const cap=mk('small','');
+      cap.textContent=(typeof item==='object'&&item.ts)?item.ts:'Photo #'+(idx+1);
+      const del=mk('button','btn','Delete');
+      del.onclick=()=>{
+        V.p.splice(idx,1);
+        saveV();
+        draw();
+        toast('Deleted from NAVIS Photos');
+      };
+
+      row.append(cap,del);
+      card.append(img,row);
+      grid.append(card);
+    });
+
+    b.append(grid);
+  };
+  draw();
+},
 music(b){const au=mk('audio');au.controls=true;au.style.width='100%';let L=[],c=-1;const list=mk('div');const f=mk('input');f.type='file';f.accept='audio/*';f.multiple=true;
 music(b){const au=mk('audio');au.controls=true;au.style.width='100%';let L=[],c=-1;const list=mk('div');const f=mk('input');f.type='file';f.accept='audio/*';f.multiple=true;
 const draw=()=>{list.innerHTML='';L.forEach((t,i)=>{const r=mk('div','card');r.textContent=t.n;r.style.marginTop='6px';if(i===c)r.style.borderColor='var(--ac)';r.onclick=()=>play(i);list.append(r)})};const play=i=>{c=i;au.src=L[i].u;au.play().catch(()=>{});draw()};
