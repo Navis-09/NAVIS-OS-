@@ -4,10 +4,14 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.telephony.SmsManager;
+import android.util.Base64;
 import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.PermissionRequest;
@@ -22,8 +26,11 @@ import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
+import androidx.core.content.FileProvider;
 import androidx.webkit.WebViewAssetLoader;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity {
@@ -31,11 +38,14 @@ public class MainActivity extends AppCompatActivity {
     private static final String SHELL_URL = "https://appassets.androidplatform.net/assets/index.html";
     private static final int REQ_CALL_PHONE = 201;
     private static final int REQ_SEND_SMS = 202;
+    private static final int REQ_CAMERA_PERM = 203;
+    private static final int REQ_TAKE_PHOTO = 204;
 
     private WebView webView;
     private String pendingCallNumber;
     private String pendingSmsNumber;
     private String pendingSmsBody;
+    private File pendingPhotoFile;
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -63,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
         settings.setUseWideViewPort(true);
 
         webView.addJavascriptInterface(new NavisPhoneBridge(), "NavisPhone");
+        webView.addJavascriptInterface(new NavisCameraBridge(), "NavisCamera");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -153,6 +164,69 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    private void startCameraCapture() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{Manifest.permission.CAMERA}, REQ_CAMERA_PERM);
+            return;
+        }
+        try {
+            File dir = new File(getCacheDir(), "navis_photos");
+            if (!dir.exists() && !dir.mkdirs()) {
+                return;
+            }
+            pendingPhotoFile = new File(dir, "capture_" + System.currentTimeMillis() + ".jpg");
+            Uri photoUri = FileProvider.getUriForFile(
+                    this, getPackageName() + ".fileprovider", pendingPhotoFile);
+
+            Intent intent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+            intent.putExtra(MediaStore.EXTRA_OUTPUT, photoUri);
+            intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            startActivityForResult(intent, REQ_TAKE_PHOTO);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String bitmapToJpegDataUrl(File file) {
+        if (file == null || !file.exists()) return null;
+        Bitmap raw = BitmapFactory.decodeFile(file.getAbsolutePath());
+        if (raw == null) return null;
+
+        int maxDim = 1024;
+        int w = raw.getWidth();
+        int h = raw.getHeight();
+        if (w > maxDim || h > maxDim) {
+            float scale = Math.min((float) maxDim / w, (float) maxDim / h);
+            w = Math.max(1, Math.round(w * scale));
+            h = Math.max(1, Math.round(h * scale));
+            raw = Bitmap.createScaledBitmap(raw, w, h, true);
+        }
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        raw.compress(Bitmap.CompressFormat.JPEG, 78, out);
+        String b64 = Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP);
+        return "data:image/jpeg;base64," + b64;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQ_TAKE_PHOTO && resultCode == RESULT_OK) {
+            final String dataUrl = bitmapToJpegDataUrl(pendingPhotoFile);
+            if (pendingPhotoFile != null && pendingPhotoFile.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                pendingPhotoFile.delete();
+            }
+            if (dataUrl != null && webView != null) {
+                String escaped = dataUrl.replace("\\", "\\\\").replace("'", "\\'");
+                webView.post(() -> webView.evaluateJavascript(
+                        "if(window.onNavisPhotoCaptured){window.onNavisPhotoCaptured('" + escaped + "');}",
+                        null));
+            }
+        }
+    }
+
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
                                            @NonNull int[] grantResults) {
@@ -173,6 +247,10 @@ public class MainActivity extends AppCompatActivity {
             pendingSmsBody = null;
             if (granted && num != null && body != null) {
                 dispatchSms(num, body);
+            }
+        } else if (requestCode == REQ_CAMERA_PERM) {
+            if (granted) {
+                startCameraCapture();
             }
         }
     }
@@ -195,6 +273,14 @@ public class MainActivity extends AppCompatActivity {
             final String target = number.trim();
             final String body = message.trim();
             runOnUiThread(() -> dispatchSms(target, body));
+            return true;
+        }
+    }
+
+    public class NavisCameraBridge {
+        @JavascriptInterface
+        public boolean capturePhoto() {
+            runOnUiThread(() -> startCameraCapture());
             return true;
         }
     }
