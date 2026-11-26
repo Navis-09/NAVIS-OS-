@@ -149,9 +149,77 @@ music(b){const au=mk('audio');au.controls=true;au.style.width='100%';let L=[],c=
 const draw=()=>{list.innerHTML='';L.forEach((t,i)=>{const r=mk('div','card');r.textContent=t.n;r.style.marginTop='6px';if(i===c)r.style.borderColor='var(--ac)';r.onclick=()=>play(i);list.append(r)})};const play=i=>{c=i;au.src=L[i].u;au.play().catch(()=>{});draw()};
 f.onchange=()=>{[...f.files].forEach(x=>L.push({n:x.name,u:URL.createObjectURL(x)}));draw();if(c<0&&L.length)play(0)};au.onended=()=>{if(c+1<L.length)play(c+1)};
 b.append(mk('small','','Plays audio files from your device. The playlist lasts until you close the app.'),f,au,list)},
-phone(b){V.c=V.c||[];const draw=()=>{b.innerHTML='<small>Calls and texts open your device’s own dialer and messages app. NAVIS Mobile has no telephony of its own. Contacts are encrypted.</small>';const n=mk('input','in');n.placeholder='Number';n.type='tel';const a=mk('a','btn p','Call'),m=mk('a','btn','Text');n.oninput=()=>{a.href='tel:'+n.value;m.href='sms:'+n.value};const r=mk('div','row');r.append(a,m);b.append(n,r);
-const nm=mk('input','in');nm.placeholder='Contact name';const sv=mk('button','btn','Save contact');sv.onclick=()=>{if(!nm.value||!n.value)return toast('Enter a name and a number.');V.c.push({n:nm.value,p:n.value});saveV();draw()};b.append(nm,sv);
-V.c.forEach((c,i)=>{const r=mk('div','card');r.style.marginTop='8px';const s=mk('span');s.textContent=c.n+' · '+c.p;const k=mk('a','btn','Call');k.href='tel:'+c.p;const t=mk('a','btn','Text');t.href='sms:'+c.p;const d=mk('button','btn','✕');d.setAttribute('aria-label','Delete contact');d.onclick=()=>{V.c.splice(i,1);saveV();draw()};r.append(s,k,t,d);b.append(r)})};draw()},
+phone(b){
+  V.c=V.c||[];V.msgs=V.msgs||[];
+  let selNum='',msgOpen=false;
+  const bridge=window.NavisPhone||(window.parent&&window.parent.NavisPhone);
+  const doCall=num=>{
+    const p=(num||'').trim();
+    if(!p)return toast('Enter a phone number.');
+    V.msgs.unshift({type:'call',to:p,at:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})});
+    V.msgs=V.msgs.slice(0,30);saveV();
+    if(bridge&&bridge.placeCall){bridge.placeCall(p);toast('Calling '+p+'…')}
+    else location.href='tel:'+encodeURIComponent(p);
+  };
+  const doSms=(num,body)=>{
+    const p=(num||'').trim(),t=(body||'').trim();
+    if(!p)return toast('Enter a phone number.');
+    if(!t)return toast('Type a message first.');
+    V.msgs.unshift({type:'sms',to:p,text:t,at:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})});
+    V.msgs=V.msgs.slice(0,30);saveV();
+    if(bridge&&bridge.sendSms){bridge.sendSms(p,t);toast('SMS sent to '+p)}
+    else location.href='sms:'+encodeURIComponent(p)+'?body='+encodeURIComponent(t);
+  };
+  const draw=()=>{
+    b.innerHTML='';
+    b.append(mk('small','','NAVIS Phone · Direct calling & SMS inside NAVIS Mobile. Contacts & logs stay encrypted.'));
+    const n=mk('input','in');n.placeholder='Phone number';n.type='tel';n.value=selNum;
+    n.oninput=()=>{selNum=n.value};
+    const callBtn=mk('button','btn p','Call');callBtn.onclick=()=>doCall(n.value);
+    const txtBtn=mk('button','btn','Text');txtBtn.onclick=()=>{selNum=n.value;msgOpen=!msgOpen;draw()};
+    const actRow=mk('div','row');actRow.append(callBtn,txtBtn);
+    b.append(n,actRow);
+
+    if(msgOpen){
+      const box=mk('div','card');box.style.cssText='flex-direction:column;align-items:stretch;margin-top:8px';
+      const ta=mk('textarea','in');ta.rows=3;ta.placeholder='Write SMS message…';ta.style.resize='vertical';
+      const sendBtn=mk('button','btn p','Send SMS');
+      sendBtn.onclick=()=>{doSms(n.value,ta.value);msgOpen=false;draw()};
+      box.append(mk('small','','Send SMS to '+(n.value||'number')),ta,sendBtn);
+      b.append(box);
+    }
+
+    const nm=mk('input','in');nm.placeholder='Contact name';
+    const sv=mk('button','btn','Save contact');
+    sv.onclick=()=>{
+      if(!nm.value.trim()||!n.value.trim())return toast('Enter a name and a number.');
+      V.c.push({n:nm.value.trim(),p:n.value.trim()});saveV();nm.value='';draw();toast('Contact saved.');
+    };
+    b.append(nm,sv);
+
+    V.c.forEach((c,i)=>{
+      const r=mk('div','card');r.style.marginTop='8px';
+      const s=mk('span');s.textContent=c.n+' · '+c.p;
+      const k=mk('button','btn','Call');k.onclick=()=>doCall(c.p);
+      const t=mk('button','btn','Text');t.onclick=()=>{selNum=c.p;msgOpen=true;draw()};
+      const d=mk('button','btn','✕');d.setAttribute('aria-label','Delete contact');
+      d.onclick=()=>{V.c.splice(i,1);saveV();draw()};
+      r.append(s,k,t,d);b.append(r);
+    });
+
+    if(V.msgs.length){
+      b.append(mk('h3','','Recent calls & texts'));
+      V.msgs.slice(0,8).forEach(m=>{
+        const r=mk('div','card');r.style.marginTop='6px';
+        const label=m.type==='call'?'Call → '+m.to:'SMS → '+m.to+': '+(m.text||'');
+        const sp=mk('span');sp.textContent=label;sp.style.fontSize='13px';
+        const tm=mk('small');tm.textContent=m.at||'';
+        r.append(sp,tm);b.append(r);
+      });
+    }
+  };
+  draw();
+},
 browser_old(b){b.append(mk('small','','Pages open in your device’s browser. An embedded browser engine isn’t part of this prototype.'));const i=mk('input','in');i.placeholder='Search or enter an address';const go=u=>{u=u.trim();if(!u)return;const web=/^https?:\/\//.test(u),dom=/^[\w-]+(\.[\w-]+)+(\/.*)?$/.test(u);window.open(web?u:dom?'https://'+u:'https://duckduckgo.com/?q='+encodeURIComponent(u),'_blank','noopener')};const g=mk('button','btn p','Open');g.onclick=()=>go(i.value);i.onkeydown=e=>{if(e.key==='Enter')go(i.value)};b.append(i,g)},
 store(b){const L=mk('div'),q=mk('input','in');q.placeholder='Search apps';const cs=mk('select','btn');cs.style.margin='8px 0';cs.setAttribute('aria-label','Category');['All',...new Set(CAT.map(a=>a.cat))].forEach(c=>{const o=mk('option','',c);o.value=c==='All'?'':c;cs.append(o)});cs.onchange=()=>draw();const draw=()=>{L.innerHTML='';CAT.filter(a=>a.n.toLowerCase().includes(q.value.toLowerCase())&&(!cs.value||a.cat===cs.value)).forEach(a=>{const ins=S.inst&&S.inst[a.id],c=mk('div','card');c.style.marginTop='8px';c.innerHTML='<span style="display:flex;gap:12px;align-items:center">'+catTile(a,'s')+'<span><b>'+a.n+'</b> <small>v'+a.v+'</small><br><small>'+a.d+(a.web?' Opens the official site in your browser.':' Permissions: none.')+'</small></span></span>';const x=mk('button','btn'+(ins?'':' p'),!ins?'Install':ins!==a.v?'Update':'Uninstall');x.onclick=()=>{S.inst=S.inst||{};if(!ins||ins!==a.v)S.inst[a.id]=a.v;else{delete S.inst[a.id];closeApp('x:'+a.id)}save();grid();draw()};c.append(x);L.append(c)})};q.oninput=draw;draw();b.append(mk('small','','Apps run in a sandbox with no access to your data. This catalog is bundled with the build.'),cs,q,L)},
 ai_old(b){const lg=mk('div');lg.style.cssText='flex:1;overflow:auto';const add=(t,c)=>{const m=mk('div','msg '+c);m.textContent=t;lg.append(m);lg.scrollTop=1e9};const i=mk('input','in');i.placeholder='Try: open notes, dark mode, timer 5, note buy milk';
