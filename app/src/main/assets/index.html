@@ -221,6 +221,208 @@ phone(b){
   };
   draw();
 },
+  files(b){
+  V.files=V.files||[
+    {id:'doc-welcome',folder:'Documents',name:'README.txt',mime:'text/plain',content:'Welcome to NAVIS Mobile Internal File Manager.\nStore documents, downloads, notes, and files here.',updated:new Date().toLocaleDateString()}
+  ];
+  const bridge=window.NavisFiles||(window.parent&&window.parent.NavisFiles);
+  const folders=['All','Downloads','Documents','Photos','Other'];
+  let activeFolder='All',query='',editingId=null,viewingId=null;
+
+  const persist=()=>{
+    saveV();
+  };
+
+  window.navisStoreFile=(folder,name,mime,content,isDataUrl=false)=>{
+    const fldr=folders.includes(folder)&&folder!=='All'?folder:'Other';
+    const cleanName=(name||('item_'+Date.now())).trim();
+    const id='f_'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
+    if(!isDataUrl && bridge && bridge.saveTextFile){
+      bridge.saveTextFile(fldr,cleanName,content||'');
+    }
+    V.files.unshift({
+      id,
+      folder:fldr,
+      name:cleanName,
+      mime:mime||'application/octet-stream',
+      content:content||'',
+      isDataUrl:!!isDataUrl,
+      updated:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+    });
+    V.files=V.files.slice(0,100);
+    persist();
+    if(document.getElementById('navis-fm-root'))draw();
+  };
+
+  const draw=()=>{
+    b.innerHTML='';
+    const root=mk('div','');root.id='navis-fm-root';
+    root.append(mk('small','','NAVIS Files · Internal storage for Downloads, Documents, and OS items.'));
+
+    // Folder filter tabs
+    const tabRow=mk('div','row');tabRow.style.cssText='flex-wrap:wrap;gap:6px;margin:8px 0';
+    folders.forEach(f=>{
+      const btn=mk('button','btn'+(activeFolder===f?' p':''),f);
+      btn.onclick=()=>{activeFolder=f;viewingId=null;draw()};
+      tabRow.append(btn);
+    });
+    root.append(tabRow);
+
+    // Search + New document / Import file controls
+    const search=mk('input','in');search.placeholder='Search files by name or folder…';search.value=query;
+    search.oninput=()=>{query=search.value.trim().toLowerCase();draw()};
+
+    const actRow=mk('div','row');actRow.style.cssText='gap:6px;margin-top:6px;flex-wrap:wrap';
+    const newDocBtn=mk('button','btn p','+ New Document');
+    newDocBtn.onclick=()=>{
+      editingId='__new__';viewingId=null;draw();
+    };
+
+    const pickInput=document.createElement('input');
+    pickInput.type='file';
+    pickInput.multiple=true;
+    pickInput.style.display='none';
+    pickInput.onchange=()=>{
+      Array.from(pickInput.files||[]).forEach(file=>{
+        const targetFolder=activeFolder==='All'
+          ?(file.type.startsWith('image/')?'Photos':'Documents')
+          :activeFolder;
+        const reader=new FileReader();
+        if(file.type.startsWith('text/')||file.name.match(/\.(txt|md|json|csv|html|js|xml|log)$/i)){
+          reader.onload=()=>window.navisStoreFile(targetFolder,file.name,file.type||'text/plain',reader.result,false);
+          reader.readAsText(file);
+        }else{
+          reader.onload=()=>window.navisStoreFile(targetFolder,file.name,file.type||'application/octet-stream',reader.result,true);
+          reader.readAsDataURL(file);
+        }
+      });
+      pickInput.value='';
+      toast('Stored inside NAVIS Files');
+    };
+
+    const importBtn=mk('button','btn','Import into OS');
+    importBtn.onclick=()=>pickInput.click();
+
+    actRow.append(newDocBtn,importBtn,pickInput);
+    root.append(search,actRow);
+
+    // Editor for creating or editing a document
+    if(editingId){
+      const existing=editingId==='__new__'?null:V.files.find(x=>x.id===editingId);
+      const box=mk('div','card');box.style.cssText='flex-direction:column;align-items:stretch;gap:8px;margin-top:10px';
+      const nameIn=mk('input','in');nameIn.placeholder='Document name (e.g. notes.txt)';
+      nameIn.value=existing?existing.name:'';
+
+      const fldrSel=document.createElement('select');
+      fldrSel.className='in';
+      ['Documents','Downloads','Other'].forEach(opt=>{
+        const o=document.createElement('option');o.value=opt;o.textContent=opt;
+        if((existing&&existing.folder===opt)||(!existing&&activeFolder===opt))o.selected=true;
+        fldrSel.append(o);
+      });
+
+      const bodyTa=mk('textarea','in');bodyTa.rows=5;bodyTa.placeholder='Write document content…';bodyTa.style.resize='vertical';
+      bodyTa.value=existing&&!existing.isDataUrl?existing.content:'';
+
+      const saveBtn=mk('button','btn p','Save File');
+      saveBtn.onclick=()=>{
+        const nm=(nameIn.value||'').trim()||('doc_'+Date.now()+'.txt');
+        const fl=fldrSel.value;
+        const txt=bodyTa.value;
+        if(bridge&&bridge.saveTextFile)bridge.saveTextFile(fl,nm,txt);
+        if(existing){
+          existing.name=nm;existing.folder=fl;existing.content=txt;
+          existing.updated=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+        }else{
+          V.files.unshift({
+            id:'f_'+Date.now()+'_'+Math.random().toString(36).slice(2,6),
+            folder:fl,name:nm,mime:'text/plain',content:txt,isDataUrl:false,
+            updated:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
+          });
+        }
+        editingId=null;persist();draw();toast('Saved to NAVIS Files');
+      };
+
+      const cancelBtn=mk('button','btn','Cancel');
+      cancelBtn.onclick=()=>{editingId=null;draw()};
+
+      const btnBar=mk('div','row');btnBar.style.gap='6px';btnBar.append(saveBtn,cancelBtn);
+      box.append(mk('strong','',existing?'Edit File':'New Internal File'),nameIn,fldrSel,bodyTa,btnBar);
+      root.append(box);
+    }
+
+    // Viewer modal/card for inspecting a file
+    if(viewingId){
+      const item=V.files.find(x=>x.id===viewingId);
+      if(item){
+        const viewBox=mk('div','card');viewBox.style.cssText='flex-direction:column;align-items:stretch;gap:8px;margin-top:10px';
+        viewBox.append(mk('strong','',item.name+' ('+item.folder+')'));
+        if(item.isDataUrl && /^data:image\//i.test(item.content||'')){
+          const img=document.createElement('img');
+          img.src=item.content;
+          img.style.cssText='max-width:100%;max-height:220px;border-radius:8px;object-fit:contain';
+          viewBox.append(img);
+        }else if(!item.isDataUrl){
+          const pre=document.createElement('pre');
+          pre.textContent=item.content||'';
+          pre.style.cssText='white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,.25);padding:10px;border-radius:8px;font-size:12px;max-height:220px;overflow:auto';
+          viewBox.append(pre);
+        }else{
+          const info=mk('small','','Binary/stored file ('+(item.mime||'file')+') kept inside NAVIS internal storage.');
+          viewBox.append(info);
+        }
+        const closeV=mk('button','btn','Close Preview');
+        closeV.onclick=()=>{viewingId=null;draw()};
+        viewBox.append(closeV);
+        root.append(viewBox);
+      }
+    }
+
+    // Filtered file list
+    const filtered=V.files.filter(f=>{
+      const matchesFolder=activeFolder==='All'||f.folder===activeFolder;
+      const matchesQuery=!query||f.name.toLowerCase().includes(query)||f.folder.toLowerCase().includes(query);
+      return matchesFolder&&matchesQuery;
+    });
+
+    if(!filtered.length){
+      root.append(mk('p','','No files in this folder yet.'));
+    }else{
+      filtered.forEach(item=>{
+        const idx=V.files.findIndex(x=>x.id===item.id);
+        const card=mk('div','card');card.style.cssText='margin-top:8px;gap:8px;flex-wrap:wrap';
+        const meta=mk('div');meta.style.cssText='flex:1;min-width:140px';
+        const title=mk('div');title.textContent=item.name;title.style.fontWeight='600';
+        const sub=mk('small','');sub.textContent=item.folder+' · '+(item.updated||'');
+        meta.append(title,sub);
+
+        const viewBtn=mk('button','btn','Open');
+        viewBtn.onclick=()=>{viewingId=item.id;editingId=null;draw()};
+
+        const editBtn=mk('button','btn','Edit');
+        editBtn.onclick=()=>{editingId=item.id;viewingId=null;draw()};
+
+        const delBtn=mk('button','btn','✕');
+        delBtn.onclick=()=>{
+          if(idx>-1){
+            if(bridge&&bridge.deleteFile&&!item.isDataUrl)bridge.deleteFile(item.folder,item.name);
+            V.files.splice(idx,1);
+            if(viewingId===item.id)viewingId=null;
+            if(editingId===item.id)editingId=null;
+            persist();draw();toast('Removed from NAVIS Files');
+          }
+        };
+
+        card.append(meta,viewBtn,editBtn,delBtn);
+        root.append(card);
+      });
+    }
+
+    b.append(root);
+  };
+
+  draw();
+},
 browser_old(b){b.append(mk('small','','Pages open in your device’s browser. An embedded browser engine isn’t part of this prototype.'));const i=mk('input','in');i.placeholder='Search or enter an address';const go=u=>{u=u.trim();if(!u)return;const web=/^https?:\/\//.test(u),dom=/^[\w-]+(\.[\w-]+)+(\/.*)?$/.test(u);window.open(web?u:dom?'https://'+u:'https://duckduckgo.com/?q='+encodeURIComponent(u),'_blank','noopener')};const g=mk('button','btn p','Open');g.onclick=()=>go(i.value);i.onkeydown=e=>{if(e.key==='Enter')go(i.value)};b.append(i,g)},
 store(b){const L=mk('div'),q=mk('input','in');q.placeholder='Search apps';const cs=mk('select','btn');cs.style.margin='8px 0';cs.setAttribute('aria-label','Category');['All',...new Set(CAT.map(a=>a.cat))].forEach(c=>{const o=mk('option','',c);o.value=c==='All'?'':c;cs.append(o)});cs.onchange=()=>draw();const draw=()=>{L.innerHTML='';CAT.filter(a=>a.n.toLowerCase().includes(q.value.toLowerCase())&&(!cs.value||a.cat===cs.value)).forEach(a=>{const ins=S.inst&&S.inst[a.id],c=mk('div','card');c.style.marginTop='8px';c.innerHTML='<span style="display:flex;gap:12px;align-items:center">'+catTile(a,'s')+'<span><b>'+a.n+'</b> <small>v'+a.v+'</small><br><small>'+a.d+(a.web?' Opens the official site in your browser.':' Permissions: none.')+'</small></span></span>';const x=mk('button','btn'+(ins?'':' p'),!ins?'Install':ins!==a.v?'Update':'Uninstall');x.onclick=()=>{S.inst=S.inst||{};if(!ins||ins!==a.v)S.inst[a.id]=a.v;else{delete S.inst[a.id];closeApp('x:'+a.id)}save();grid();draw()};c.append(x);L.append(c)})};q.oninput=draw;draw();b.append(mk('small','','Apps run in a sandbox with no access to your data. This catalog is bundled with the build.'),cs,q,L)},
 ai_old(b){const lg=mk('div');lg.style.cssText='flex:1;overflow:auto';const add=(t,c)=>{const m=mk('div','msg '+c);m.textContent=t;lg.append(m);lg.scrollTop=1e9};const i=mk('input','in');i.placeholder='Try: open notes, dark mode, timer 5, note buy milk';
