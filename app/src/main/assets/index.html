@@ -401,6 +401,187 @@
        3. BUILT-IN OS APPLICATIONS
        ========================================================= */
     const APP = {
+      /* ---------------- NAVIS AI ASSISTANT ---------------- */
+ai(b) {
+  V.aiKey = V.aiKey || '';
+  V.aiModel = V.aiModel || 'gemini-2.5-flash';
+  V.aiSystem = V.aiSystem || 'You are NAVIS AI, a helpful, concise assistant built into NAVIS Mobile.';
+  V.aiChats = V.aiChats || [];
+  let busy = false;
+  let showCfg = !V.aiKey;
+
+  const draw = () => {
+    b.innerHTML = '';
+    b.append(mk('small', '', 'NAVIS AI · Live assistant inside NAVIS Mobile. API key & chats stay in your vault.'));
+
+    const topRow = mk('div', 'row');
+    topRow.style.cssText = 'flex-wrap:wrap;gap:6px;margin-top:6px';
+    const cfgBtn = mk('button', 'btn', showCfg ? 'Hide API Setup' : 'API Setup');
+    cfgBtn.onclick = () => { showCfg = !showCfg; draw(); };
+
+    const clrBtn = mk('button', 'btn', 'Clear Chat');
+    clrBtn.onclick = () => {
+      V.aiChats = [];
+      saveV();
+      draw();
+      toast('Chat cleared');
+    };
+    topRow.append(cfgBtn, clrBtn);
+    b.append(topRow);
+
+    if (showCfg) {
+      const cfg = mk('div', 'card');
+      cfg.style.cssText = 'flex-direction:column;align-items:stretch;gap:6px;margin-top:8px';
+
+      const keyIn = mk('input', 'in');
+      keyIn.type = 'password';
+      keyIn.placeholder = 'Paste Gemini API key (AIza...)';
+      keyIn.value = V.aiKey;
+
+      const modIn = mk('input', 'in');
+      modIn.placeholder = 'Model (e.g. gemini-2.5-flash)';
+      modIn.value = V.aiModel;
+
+      const sysIn = mk('input', 'in');
+      sysIn.placeholder = 'System instruction';
+      sysIn.value = V.aiSystem;
+
+      const saveCfg = mk('button', 'btn p', 'Save AI Config');
+      saveCfg.onclick = () => {
+        V.aiKey = (keyIn.value || '').trim();
+        V.aiModel = (modIn.value || 'gemini-2.5-flash').trim();
+        V.aiSystem = (sysIn.value || '').trim();
+        saveV();
+        showCfg = false;
+        draw();
+        toast('AI configuration saved');
+      };
+
+      cfg.append(mk('strong', '', 'Gemini API Settings'), keyIn, modIn, sysIn, saveCfg);
+      b.append(cfg);
+    }
+
+    const log = mk('div', '');
+    log.style.cssText = 'display:flex;flex-direction:column;gap:8px;margin-top:10px;max-height:300px;overflow-y:auto';
+
+    if (!V.aiChats.length) {
+      log.append(mk('p', '', 'Ask NAVIS AI anything—drafts, code, ideas, or OS help.'));
+    } else {
+      V.aiChats.forEach((msg, idx) => {
+        const bubble = mk('div', 'card');
+        bubble.style.cssText = 'flex-direction:column;align-items:stretch;gap:6px';
+        const who = mk('small', '', (msg.role === 'user' ? 'You' : 'NAVIS AI') + (msg.at ? ' · ' + msg.at : ''));
+        who.style.fontWeight = '700';
+
+        const txt = document.createElement('div');
+        txt.textContent = msg.text;
+        txt.style.cssText = 'white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.45;user-select:text';
+
+        bubble.append(who, txt);
+
+        if (msg.role === 'model') {
+          const saveFileBtn = mk('button', 'btn', 'Save Reply to Files');
+          saveFileBtn.style.alignSelf = 'flex-start';
+          saveFileBtn.onclick = () => {
+            if (typeof window.navisStoreFile === 'function') {
+              window.navisStoreFile(
+                'Documents',
+                'ai_reply_' + (idx + 1) + '.txt',
+                'text/plain',
+                msg.text,
+                false
+              );
+              toast('Saved reply to NAVIS Files');
+            }
+          };
+          bubble.append(saveFileBtn);
+        }
+        log.append(bubble);
+      });
+    }
+    b.append(log);
+
+    const promptTa = mk('textarea', 'in');
+    promptTa.rows = 3;
+    promptTa.placeholder = busy ? 'Thinking…' : 'Message NAVIS AI…';
+    promptTa.disabled = busy;
+
+    const sendBtn = mk('button', 'btn p', busy ? 'Sending…' : 'Send');
+    sendBtn.disabled = busy;
+
+    const sendMsg = async () => {
+      if (busy) return;
+      const q = (promptTa.value || '').trim();
+      if (!q) return toast('Type a message first.');
+      if (!V.aiKey) {
+        showCfg = true;
+        draw();
+        return toast('Add your Gemini API key first.');
+      }
+
+      const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      V.aiChats.push({ role: 'user', text: q, at: now });
+      V.aiChats = V.aiChats.slice(-40);
+      saveV();
+      busy = true;
+      draw();
+
+      try {
+        const contents = V.aiChats.slice(-16).map(m => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text: m.text }]
+        }));
+
+        const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(V.aiModel)}:generateContent?key=${encodeURIComponent(V.aiKey)}`;
+        const payload = { contents };
+        if (V.aiSystem) {
+          payload.systemInstruction = { parts: [{ text: V.aiSystem }] };
+        }
+
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error((data && data.error && data.error.message) || ('HTTP ' + res.status));
+        }
+
+        const parts = (((data.candidates || [])[0] || {}).content || {}).parts || [];
+        const reply = parts.map(p => p.text || '').join('').trim() || '(Empty response)';
+
+        V.aiChats.push({
+          role: 'model',
+          text: reply,
+          at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        V.aiChats = V.aiChats.slice(-40);
+        saveV();
+      } catch (err) {
+        V.aiChats.push({
+          role: 'model',
+          text: 'Error: ' + (err && err.message ? err.message : 'Request failed'),
+          at: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        });
+        V.aiChats = V.aiChats.slice(-40);
+        saveV();
+      } finally {
+        busy = false;
+        draw();
+        setTimeout(() => {
+          const el = document.getElementById('viewport');
+          if (el) el.scrollTop = el.scrollHeight;
+        }, 30);
+      }
+    };
+
+    sendBtn.onclick = sendMsg;
+    b.append(promptTa, sendBtn);
+  };
+
+  draw();
+},
       /* ---------------- PHONE & DIRECT SMS ---------------- */
       phone(b) {
         V.c = V.c || [];
@@ -1355,6 +1536,7 @@
       { id: 'settings', name: 'Settings', icon: '⚙️' },
       { id: 'notes', name: 'Notes', icon: '📝' },
       { id: 'calc', name: 'Calculator', icon: '🧮' }
+      { id: 'ai', name: 'NAVIS AI', icon: '🤖' }
     ];
 
     let activeAppId = null;
