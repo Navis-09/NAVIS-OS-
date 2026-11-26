@@ -36,6 +36,7 @@ import java.util.ArrayList;
 public class MainActivity extends AppCompatActivity {
 
     private static final String SHELL_URL = "https://appassets.androidplatform.net/assets/index.html";
+    private static final String DEFAULT_BROWSER_URL = "https://www.google.com";
     private static final int REQ_CALL_PHONE = 201;
     private static final int REQ_SEND_SMS = 202;
     private static final int REQ_CAMERA_PERM = 203;
@@ -74,6 +75,7 @@ public class MainActivity extends AppCompatActivity {
 
         webView.addJavascriptInterface(new NavisPhoneBridge(), "NavisPhone");
         webView.addJavascriptInterface(new NavisCameraBridge(), "NavisCamera");
+        webView.addJavascriptInterface(new NavisBrowserBridge(), "NavisBrowser");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -84,10 +86,13 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri uri = request.getUrl();
+                if (uri == null) return true;
+
                 String host = uri.getHost() != null ? uri.getHost() : "";
                 if ("appassets.androidplatform.net".equals(host)) {
                     return false;
                 }
+
                 String scheme = uri.getScheme() != null ? uri.getScheme().toLowerCase() : "";
                 if ("tel".equals(scheme)) {
                     String raw = uri.getSchemeSpecificPart();
@@ -96,7 +101,11 @@ public class MainActivity extends AppCompatActivity {
                     }
                     return true;
                 }
-                if ("mailto".equals(scheme) || "http".equals(scheme) || "https".equals(scheme)) {
+                if ("http".equals(scheme) || "https".equals(scheme)) {
+                    openInNavisBrowser(uri.toString());
+                    return true;
+                }
+                if ("mailto".equals(scheme)) {
                     try {
                         startActivity(new Intent(Intent.ACTION_VIEW, uri));
                     } catch (Exception ignored) {
@@ -115,6 +124,16 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.loadUrl(SHELL_URL);
+    }
+
+    private void openInNavisBrowser(String url) {
+        String target = (url == null || url.trim().isEmpty()) ? DEFAULT_BROWSER_URL : url.trim();
+        try {
+            Intent intent = new Intent(MainActivity.this, BrowserActivity.class);
+            intent.putExtra(BrowserActivity.EXTRA_URL, target);
+            startActivity(intent);
+        } catch (Exception ignored) {
+        }
     }
 
     private void startDirectCall(String number) {
@@ -281,6 +300,16 @@ public class MainActivity extends AppCompatActivity {
         @JavascriptInterface
         public boolean capturePhoto() {
             runOnUiThread(() -> startCameraCapture());
+            return true;
+        }
+    }
+
+    public class NavisBrowserBridge {
+        @JavascriptInterface
+        public boolean openUrl(String url) {
+            final String target = (url == null || url.trim().isEmpty())
+                    ? DEFAULT_BROWSER_URL : url.trim();
+            runOnUiThread(() -> openInNavisBrowser(target));
             return true;
         }
     }
