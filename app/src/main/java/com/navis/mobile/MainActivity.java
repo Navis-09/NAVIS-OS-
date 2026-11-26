@@ -31,6 +31,9 @@ import androidx.webkit.WebViewAssetLoader;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 
 public class MainActivity extends AppCompatActivity {
@@ -76,6 +79,7 @@ public class MainActivity extends AppCompatActivity {
         webView.addJavascriptInterface(new NavisPhoneBridge(), "NavisPhone");
         webView.addJavascriptInterface(new NavisCameraBridge(), "NavisCamera");
         webView.addJavascriptInterface(new NavisBrowserBridge(), "NavisBrowser");
+        webView.addJavascriptInterface(new NavisFilesBridge(), "NavisFiles");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
@@ -311,6 +315,55 @@ public class MainActivity extends AppCompatActivity {
                     ? DEFAULT_BROWSER_URL : url.trim();
             runOnUiThread(() -> openInNavisBrowser(target));
             return true;
+        }
+    }
+
+    public class NavisFilesBridge {
+        private File resolveSafeFile(String folder, String name) {
+            String safeFolder = (folder == null || folder.trim().isEmpty())
+                    ? "Documents" : folder.replaceAll("[^a-zA-Z0-9_-]", "_");
+            String safeName = (name == null || name.trim().isEmpty())
+                    ? ("file_" + System.currentTimeMillis()) : name.replaceAll("[^a-zA-Z0-9._-]", "_");
+            File baseDir = new File(getFilesDir(), "navis_storage/" + safeFolder);
+            if (!baseDir.exists() && !baseDir.mkdirs()) return null;
+            return new File(baseDir, safeName);
+        }
+
+        @JavascriptInterface
+        public String saveTextFile(String folder, String name, String content) {
+            File f = resolveSafeFile(folder, name);
+            if (f == null) return "";
+            try (FileOutputStream out = new FileOutputStream(f)) {
+                byte[] bytes = (content != null ? content : "").getBytes(StandardCharsets.UTF_8);
+                out.write(bytes);
+                out.flush();
+                return f.getAbsolutePath();
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public String readTextFile(String folder, String name) {
+            File f = resolveSafeFile(folder, name);
+            if (f == null || !f.exists()) return "";
+            try (FileInputStream in = new FileInputStream(f);
+                 ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+                byte[] buf = new byte[4096];
+                int n;
+                while ((n = in.read(buf)) != -1) {
+                    bos.write(buf, 0, n);
+                }
+                return bos.toString(StandardCharsets.UTF_8.name());
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        @JavascriptInterface
+        public boolean deleteFile(String folder, String name) {
+            File f = resolveSafeFile(folder, name);
+            return f != null && f.exists() && f.delete();
         }
     }
 
